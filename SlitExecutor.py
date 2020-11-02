@@ -94,26 +94,24 @@ class SlitExecutor(PyTango.Device_4Impl):
         # check what is our mode
         # --------------------------------------------------------
 
-        if self.Direction == 'Horizontal':
-            self.motor_names = ['Left', 'Right']
-        elif self.Direction == 'Vertical':
-            self.motor_names = ['Top', 'Bottom']
+        if str(self.Direction).lower() in ['h', 'horizontal']:
+            self._motor_names = ['Left', 'Right']
+        elif str(self.Direction).lower() in ['v', 'vertical']:
+            self._motor_names = ['Top', 'Bottom']
         else:
             PyTango.Except.throw_exception("vm", "Unknown mode", "VmExecutor")
 
         # --------------------------------------------------------
         # making real motor proxies
         # --------------------------------------------------------
-        self.proxies = []
-        for name in self.motor_names:
+        self._proxies = []
+        for name in self._motor_names:
             try:
                 proxy = getattr(self, name)
             except:
                 PyTango.Except.throw_exception("vm", 'Cannot find {} attribute'.format(name), "VmExecutor")
 
-            self.proxies.append(PyTango.DeviceProxy(proxy))
-            self.result_sim.append('{} [{}]: position_sim not set'.format(name, proxy))
-
+            self._proxies.append(PyTango.DeviceProxy(proxy))
 
         # ----- PROTECTED REGION ID(VmExecutor.init_device) ENABLED START -----#
         self.set_state(PyTango.DevState.ON)
@@ -156,10 +154,9 @@ class SlitExecutor(PyTango.Device_4Impl):
                                                min_value) + ", max: " + str(max_value) + ")",
                                            "VmExecutor")
 
-        for motor_proxy, new_position in zip(self.proxies, self.vm_to_real_motors(new_position)):
+        for motor_proxy, new_position in zip(self._proxies, self._vm_to_real_motors(new_position)):
             motor_proxy.Position = new_position
 
-        return True
 
         # ----- PROTECTED REGION END -----#	//	VmExecutor.Position_write
 
@@ -171,10 +168,10 @@ class SlitExecutor(PyTango.Device_4Impl):
         #
         # if one of the motors is in the limit return 1
         #
-        for proxy in self.proxies:
+        for proxy in self._proxies:
             no_limit *= proxy.CwLimit == 0
 
-        self.attr_CwLimit_read = no_limit
+        self.attr_CwLimit_read = not no_limit
         attr.set_value(self.attr_CwLimit_read)
 
         # ----- PROTECTED REGION END -----#	//	VmExecutor.CwLimit_read
@@ -186,10 +183,10 @@ class SlitExecutor(PyTango.Device_4Impl):
         #
         # if one of the motors is in the limit return 1
         #
-        for proxy in self.proxies:
+        for proxy in self._proxies:
             no_limit *= proxy.CCwLimit == 0
 
-        self.attr_CcwLimit_read = no_limit
+        self.attr_CcwLimit_read = not no_limit
         attr.set_value(self.attr_CcwLimit_read)
 
         # ----- PROTECTED REGION END -----#	//	VmExecutor.CcwLimit_read
@@ -248,7 +245,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         self.debug_stream("In read_ResultSim()")
         # ----- PROTECTED REGION ID(VmExecutor.ResultSim_read) ENABLED START -----#
         _answer = []
-        for name, position in zip(self.motor_names, self.vm_to_real_motors(self.position_sim)):
+        for name, position in zip(self._motor_names, self._vm_to_real_motors(self.attr_PositionSim_read)):
             _answer.append("{} [{}]: {}".format(name, getattr(self, name), position))
 
         self.attr_ResultSim_read = _answer
@@ -318,7 +315,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         #
         # if one device is in FAULT the VM is in FAULT too
         #
-        for proxy in self.proxies:
+        for proxy in self._proxies:
             if proxy.state() == PyTango.DevState.FAULT:
                 argout = PyTango.DevState.FAULT
                 break
@@ -326,7 +323,7 @@ class SlitExecutor(PyTango.Device_4Impl):
             #
             # if one device is MOVING the VM is MOVING too
             #
-            for proxy in self.proxies:
+            for proxy in self._proxies:
                 if proxy.state() == PyTango.DevState.MOVING:
                     argout = PyTango.DevState.MOVING
                     break
@@ -349,7 +346,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         # ----- PROTECTED REGION ID(VmExecutor.Calibrate) ENABLED START -----#
 
         try:
-            for proxy, position in zip(self.proxies, self.vm_to_real_motors(argin)):
+            for proxy, position in zip(self._proxies, self.vm_to_real_motors(argin)):
                 proxy.Calibrate(position)
             return True
         except:
@@ -376,7 +373,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         :rtype: PyTango.DevVoid """
         self.debug_stream("In StopMove()")
         # ----- PROTECTED REGION ID(VmExecutor.StopMove) ENABLED START -----#
-        for proxy in self.proxies:
+        for proxy in self._proxies:
             proxy.StopMove()
 
         # ----- PROTECTED REGION END -----#	//	VmExecutor.StopMove
@@ -399,8 +396,8 @@ class SlitExecutor(PyTango.Device_4Impl):
         ###
         # this function returns the position of slit according to the current mode
         ###
-        p1 = self.proxies[0].Position
-        p2 = self.proxies[1].Position
+        p1 = self._proxies[0].Position
+        p2 = self._proxies[1].Position
 
         if str(self.Mode).lower() in ['g', 'gap']:
             return p1 - p2
@@ -422,16 +419,12 @@ class SlitExecutor(PyTango.Device_4Impl):
         ###
 
         if str(self.Mode).lower() in ['g', 'gap']:
-            delta = (new_position - self.real_motors_to_vm())/2.
-            return self.proxies[0].Position + delta, self.proxies[1].Position + delta
+            delta = (new_position - self._real_motors_to_vm())/2.
+            return self._proxies[0].Position + delta, self._proxies[1].Position - delta
 
         elif str(self.Mode).lower() in ['p', 'pos', 'position']:
-            positions = []
-            delta = new_position - self.real_motors_to_vm()
-            for proxy in self.proxies:
-                positions.append(proxy.Position + delta)
-            return positions
-
+            delta = new_position - self._real_motors_to_vm()
+            return self._proxies[0].Position + delta, self._proxies[1].Position + delta
         else:
             PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
 
@@ -444,21 +437,21 @@ class SlitExecutor(PyTango.Device_4Impl):
         # this function returns the max limits of slits according to the current mode
         ###
         if str(self.Mode).lower() in ['g', 'gap']:
-            distances_to_limit = (self.proxies[0].UnitLimitMax - self.proxies[0].Position,
-                                  self.proxies[1].Position - self.proxies[1].UnitLimitMin)
+            distances_to_limit = (self._proxies[0].UnitLimitMax - self._proxies[0].Position,
+                                  self._proxies[1].Position - self._proxies[1].UnitLimitMin)
 
-            if distances_to_limit[0] != distances_to_limit[0]:
-                limit_max = self.real_motors_to_vm() + 2 * min(distances_to_limit)
+            if distances_to_limit[0] != distances_to_limit[1]:
+                limit_max = self._real_motors_to_vm() + 2 * min(distances_to_limit)
             else:
-                limit_max = self.proxies[0].UnitLimitMax - self.proxies[1].UnitLimitMin
+                limit_max = self._proxies[0].UnitLimitMax - self._proxies[1].UnitLimitMin
             return limit_max
 
         elif str(self.Mode).lower() in ['p', 'pos', 'position']:
             distance_to_limit = []
-            for proxy in self.proxies:
+            for proxy in self._proxies:
                 distance_to_limit.append(proxy.UnitLimitMax - proxy.Position)
 
-            return self.real_motors_to_vm() + min(distance_to_limit)
+            return self._real_motors_to_vm() + min(distance_to_limit)
 
         else:
             PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
@@ -472,21 +465,21 @@ class SlitExecutor(PyTango.Device_4Impl):
         # this function returns the max limits of slits according to the current mode
         ###
         if str(self.Mode).lower() in ['g', 'gap']:
-            distances_to_limit = (self.proxies[0].Position - self.proxies[0].UnitLimitMin,
-                                  self.proxies[1].UnitLimitMax - self.proxies[1].Position)
+            distances_to_limit = (self._proxies[0].Position - self._proxies[0].UnitLimitMin,
+                                  self._proxies[1].UnitLimitMax - self._proxies[1].Position)
 
-            if distances_to_limit[0] != distances_to_limit[0]:
-                limit_min = self.real_motors_to_vm() - 2 * min(distances_to_limit)
+            if distances_to_limit[0] != distances_to_limit[1]:
+                limit_min = self._real_motors_to_vm() - 2 * min(distances_to_limit)
             else:
-                limit_min = self.proxies[0].UnitLimitMin - self.proxies[1].UnitLimitMax
+                limit_min = self._proxies[0].UnitLimitMin - self._proxies[1].UnitLimitMax
             return limit_min
 
         elif str(self.Mode).lower() in ['p', 'pos', 'position']:
             distance_to_limit = []
-            for proxy in self.proxies:
+            for proxy in self._proxies:
                 distance_to_limit.append(proxy.UnitLimitMin - proxy.Position)
 
-            return self.real_motors_to_vm() + min(distance_to_limit)
+            return self._real_motors_to_vm() + min(distance_to_limit)
 
         else:
             PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
@@ -592,7 +585,7 @@ class SlitExecutorClass(PyTango.DeviceClass):
         'ResultSim':
             [[PyTango.DevString,
               PyTango.SPECTRUM,
-              PyTango.READ, 100]],
+              PyTango.READ, 2]],
     }
 
 
