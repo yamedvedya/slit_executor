@@ -148,7 +148,7 @@ class CombinedMotor(PyTango.Device_4Impl):
         # making real motor proxies
         # --------------------------------------------------------
         self._motors = []
-        for name, coupling, position in self._motors:
+        for name, coupling, position in _motors_definition:
             try:
                 self._motors.append((PyTango.DeviceProxy(name), coupling, position))
             except:
@@ -193,7 +193,7 @@ class CombinedMotor(PyTango.Device_4Impl):
                                                min_value) + ", max: " + str(max_value) + ")",
                                            "VmExecutor")
 
-        for motor_proxy, new_position in zip(self._motors, self._vm_to_real_motors(new_position)):
+        for motor_proxy, _, _, new_position in zip(self._motors, self._vm_to_real_motors(new_position)):
             motor_proxy.Position = new_position
 
 
@@ -206,7 +206,7 @@ class CombinedMotor(PyTango.Device_4Impl):
         #
         # if one of the motors is in the limit return 1
         #
-        for proxy in self._motors:
+        for proxy, _, _ in self._motors:
             no_limit *= proxy.CwLimit == 0
 
         attr.set_value(not no_limit)
@@ -220,7 +220,7 @@ class CombinedMotor(PyTango.Device_4Impl):
         #
         # if one of the motors is in the limit return 1
         #
-        for proxy in self._motors:
+        for proxy, _, _ in self._motors:
             no_limit *= proxy.CCwLimit == 0
 
         attr.set_value(not no_limit)
@@ -290,8 +290,11 @@ class CombinedMotor(PyTango.Device_4Impl):
 
     def _set_attribute(self, name, value):
 
-        for proxy in self._motors:
-            setattr(proxy, name, value*np.sign(getattr(proxy, name)))
+        for proxy, coupling, _ in self._motors:
+            if COMMON_ATTRIBUTES[name]:
+                setattr(proxy, name, value*coupling*np.sign(getattr(proxy, name)))
+            else:
+                setattr(proxy, name, value*np.sign(getattr(proxy, name)))
 
     # -----------------------------------------------------------------------------
     def _get_attribute(self, name):
@@ -302,8 +305,8 @@ class CombinedMotor(PyTango.Device_4Impl):
                   for proxy, _, scale in self._motors]
 
         new_value = np.min(np.abs(values))
-        for proxy, _, _, value in zip(self._motors, values):
-            setattr(proxy, name, new_value*np.sign(value))
+        for proxy, coupling, _, value in zip(self._motors, values):
+            setattr(proxy, name, new_value*coupling*np.sign(value))
 
         return new_value
 
@@ -461,7 +464,7 @@ class CombinedMotor(PyTango.Device_4Impl):
         #
         # if one device is in FAULT the VM is in FAULT too
         #
-        for proxy in self._motors:
+        for proxy, _, _ in self._motors:
             if proxy.state() == PyTango.DevState.FAULT:
                 argout = PyTango.DevState.FAULT
                 break
@@ -469,7 +472,7 @@ class CombinedMotor(PyTango.Device_4Impl):
             #
             # if one device is MOVING the VM is MOVING too
             #
-            for proxy in self._motors:
+            for proxy, _, _ in self._motors:
                 if proxy.state() == PyTango.DevState.MOVING:
                     argout = PyTango.DevState.MOVING
                     break
@@ -491,8 +494,8 @@ class CombinedMotor(PyTango.Device_4Impl):
 
         self.debug_stream("In Calibrate()")
         try:
-            for proxy, position in zip(self._motors, self.vm_to_real_motors(argin)):
-                proxy.Calibrate(position)
+            for proxy, coupling, _, position in zip(self._motors, self.vm_to_real_motors(argin)):
+                proxy.Calibrate(coupling*position)
             return True
         except:
             return False
@@ -513,7 +516,7 @@ class CombinedMotor(PyTango.Device_4Impl):
         :return:
         :rtype: PyTango.DevVoid """
         self.debug_stream("In StopMove()")
-        for proxy in self._motors:
+        for proxy, _, _ in self._motors:
             proxy.StopMove()
 
     # --------------------------------------------------------
@@ -524,17 +527,11 @@ class CombinedMotor(PyTango.Device_4Impl):
         ###
         # this function returns the position of slit according to the current mode
         ###
-        p1 = self._motors[0].Position
-        p2 = self._motors[1].Position
+        value = 0
+        for motor, _, scale in self._motors:
+            value += motor.Position*scale
 
-        if str(self.Mode).lower() in ['g', 'gap']:
-            return p1 - p2
-
-        elif str(self.Mode).lower() in ['p', 'pos', 'position']:
-            return (p1 + p2) / 2.
-
-        else:
-            PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
+        return value
 
 
     # --------------------------------------------------------
@@ -546,15 +543,12 @@ class CombinedMotor(PyTango.Device_4Impl):
         # this function returns the position real motors from the position of slits according to the current mode
         ###
 
-        if str(self.Mode).lower() in ['g', 'gap']:
-            delta = (new_position - self._real_motors_to_vm())/2.
-            return self._motors[0].Position + delta, self._motors[1].Position - delta
+        current_position = self._real_motors_to_vm()
+        deltas = []
+        for motor, coupling, _ in self._motors:
+            deltas.append(motor.Position + (new_position-current_position)*coupling)
 
-        elif str(self.Mode).lower() in ['p', 'pos', 'position']:
-            delta = new_position - self._real_motors_to_vm()
-            return self._motors[0].Position + delta, self._motors[1].Position + delta
-        else:
-            PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
+        return deltas
 
     # --------------------------------------------------------
     # _get_limit_max
@@ -564,25 +558,19 @@ class CombinedMotor(PyTango.Device_4Impl):
         ###
         # this function returns the max limits of slits according to the current mode
         ###
-        if str(self.Mode).lower() in ['g', 'gap']:
-            distances_to_limit = (self._motors[0].UnitLimitMax - self._motors[0].Position,
-                                  self._motors[1].Position - self._motors[1].UnitLimitMin)
+        delta_mot_max = 1e8
 
-            if distances_to_limit[0] != distances_to_limit[1]:
-                limit_max = self._real_motors_to_vm() + 2 * min(distances_to_limit)
+        for proxy, coupling, _ in self._motors:
+            if coupling >= 0:
+                unitmax = proxy.UnitLimitMax
             else:
-                limit_max = self._motors[0].UnitLimitMax - self._motors[1].UnitLimitMin
-            return limit_max
+                unitmax = proxy.UnitLimitMin
 
-        elif str(self.Mode).lower() in ['p', 'pos', 'position']:
-            distance_to_limit = []
-            for proxy in self._motors:
-                distance_to_limit.append(proxy.UnitLimitMax - proxy.Position)
+            delta = unitmax - proxy.Position
+            if coupling != 0:
+                delta_mot_max = min(delta_mot_max, delta/coupling)
 
-            return self._real_motors_to_vm() + min(distance_to_limit)
-
-        else:
-            PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
+        return self._real_motors_to_vm() + delta_mot_max
 
     # --------------------------------------------------------
     # _get_limit_max
@@ -592,28 +580,19 @@ class CombinedMotor(PyTango.Device_4Impl):
         ###
         # this function returns the max limits of slits according to the current mode
         ###
-        if str(self.Mode).lower() in ['g', 'gap']:
-            distances_to_limit = (self._motors[0].Position - self._motors[0].UnitLimitMin,
-                                  self._motors[1].UnitLimitMax - self._motors[1].Position)
+        delta_mot_min = 1e8
 
-            if distances_to_limit[0] != distances_to_limit[1]:
-                limit_min = self._real_motors_to_vm() - 2 * min(distances_to_limit)
+        for proxy, coupling, _ in self._motors:
+            if coupling >= 0:
+                unitmax = proxy.UnitLimitMin
             else:
-                limit_min = self._motors[0].UnitLimitMin - self._motors[1].UnitLimitMax
-            return limit_min
+                unitmax = proxy.UnitLimitMax
 
-        elif str(self.Mode).lower() in ['p', 'pos', 'position']:
-            distance_to_limit = []
-            for proxy in self._motors:
-                distance_to_limit.append(proxy.UnitLimitMin - proxy.Position)
+            delta = unitmax - proxy.Position
+            if coupling != 0:
+                delta_mot_min = min(delta_mot_min, delta / coupling)
 
-            return self._real_motors_to_vm() + min(distance_to_limit)
-
-        else:
-            PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
-
-
-
+        return self._real_motors_to_vm() + delta_mot_min
 
 class CombinedMotorClass(PyTango.DeviceClass):
 
