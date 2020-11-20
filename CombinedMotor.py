@@ -6,7 +6,7 @@
 ## license :
 ##============================================================================
 ##
-## File :        SlitExecutor.py
+## File :        CombinedMotor.py
 ##
 ## Project :     TANGO Device Server
 ##
@@ -35,22 +35,91 @@
 ## $HeadUrl :     $
 ##============================================================================
 
-"""Executes slit control scripts"""
+"""
+Use to do coupled motion of several motors by one combined motor (VM)
 
-__all__ = ["SlitExecutor", "SlitExecutorClass", "main"]
+To setup full the MOTOR array with (<motor>, <coupling coefficient>, <position coefficient>) tuples, where:
+
+<motor> - tango address of motor
+
+<coupling coefficients> - how the position, speed, acceleration of physical motor scaled relative to the CM properties
+i.e.:
+    physical motor position = coupling coefficient * combined motor position
+
+<position coefficient> - coefficient for calculation of combined motor property out of physical motors
+i.e.:
+    combined motor position = motor1 * position coefficient1 + motor2 * position coefficient2 + ....
+
+Important:
+both coefficients must obey condition:
+1 = coupling coefficients1 * position coefficient1 + coupling coefficients2 * position coefficient2 + ...
+
+Examples:
+    For slit center (cy) assuming that  slit_top, slit_bottom moves positive up
+        coupling coefficient 1 = 1
+        coupling coefficient 2 = 1
+
+        position coefficient 1 = 0.5
+        position coefficient 2 = 0.5
+
+    For slit gap (dy) assuming slit_top, slit_bottom moves positive up
+        coupling coefficient 1 = 0.5
+        coupling coefficient 2 = -0.5
+
+        position coefficient 1 = 1
+        position coefficient 2 = -1
+
+    For table with 3 legs y1, y2, y3 using 1st leg to define value of virtual motor
+        coupling coefficient 1 = 1
+        coupling coefficient 2 = 1
+        coupling coefficient 3 = 1
+
+        position coefficient 1 = 1
+        position coefficient 2 = 0
+        position coefficient 3 = 0
+
+    For theta 2 theta motor with th, 2th - real motors
+        coupling coefficient 1 = 1
+        coupling coefficient 2 = 2
+
+        position coefficient 1 = 1
+        position coefficient 2 = 0
+
+
+Limits for motion taken correctly from soft limits of physical motors.
+Change of limits of virtual motor is not allowed
+
+Calibration of the position of the virtual motor is allowed and done for
+via calibration of physical motors using COEF (like motion).
+"""
+
+__all__ = ["CombinedMotor", "CombinedMotorClass", "main"]
 
 __docformat__ = 'restructuredtext'
 
+
+# here we define which attributes has to scale, and which - not
+
+COMMON_ATTRIBUTES = {'Acceleration': True,
+                     'BaseRate': True,
+                     'Conversion': False,
+                     'SlewRate': True,
+                     'SlewRateMax': False,
+                     'SlewRateMin': False,
+                     'StepBacklash': False}
+
 import PyTango
 import sys
+import os
+import importlib
 import numpy as np
 
-class SlitExecutor(PyTango.Device_4Impl):
+class CombinedMotor(PyTango.Device_4Impl):
 
     def __init__(self, cl, name):
         PyTango.Device_4Impl.__init__(self, cl, name)
         self.debug_stream("In __init__()")
-        SlitExecutor.init_device(self)
+        CombinedMotor.init_device(self)
 
     def delete_device(self):
         self.debug_stream("In delete_device()")
@@ -60,28 +129,30 @@ class SlitExecutor(PyTango.Device_4Impl):
         self.get_device_properties(self.get_device_class())
         self._position_sim = 0.0
 
-        # --------------------------------------------------------
-        # check what is our mode
-        # --------------------------------------------------------
+        sys.path.append(os.path.dirname(self.MotorsCode))
+        basename = os.path.basename(self.MotorsCode)
 
-        if str(self.Direction).lower() in ['h', 'horizontal']:
-            self._motor_names = ['Left', 'Right']
-        elif str(self.Direction).lower() in ['v', 'vertical']:
-            self._motor_names = ['Top', 'Bottom']
-        else:
-            PyTango.Except.throw_exception("vm", "Unknown mode", "VmExecutor")
+        #
+        # remove the extension .py
+        #
+        if basename.find(".py") > 0:
+            basename = basename.rpartition('.')[0]
+
+        try:
+            _motors_definition = importlib.import_module(basename).MOTORS
+        except:
+            PyTango.Except.throw_exception("vm", 'Cannot import MOTORS from {}'.format(basename), "CombinedMotor")
+
 
         # --------------------------------------------------------
         # making real motor proxies
         # --------------------------------------------------------
-        self._proxies = []
-        for name in self._motor_names:
+        self._motors = []
+        for name, coupling, position in self._motors:
             try:
-                proxy = getattr(self, name)
+                self._motors.append((PyTango.DeviceProxy(name), coupling, position))
             except:
-                PyTango.Except.throw_exception("vm", 'Cannot find {} attribute'.format(name), "VmExecutor")
-
-            self._proxies.append(PyTango.DeviceProxy(proxy))
+                PyTango.Except.throw_exception("vm", 'Cannot find {} motor'.format(name), "VmExecutor")
 
         self.set_state(PyTango.DevState.ON)
 
@@ -91,19 +162,15 @@ class SlitExecutor(PyTango.Device_4Impl):
 
         # Checking whether sub-motors have equal settings
 
-        for attribute in ['Acceleration', 'BaseRate', 'Conversion', 'SlewRate', 'SlewRateMax', 'SlewRateMin',
-                          'StepBacklash']:
+        for attribute in COMMON_ATTRIBUTES.keys():
             self._get_attribute(attribute)
-
 
     def always_executed_hook(self):
         self.debug_stream("In always_excuted_hook()")
 
-
     # -----------------------------------------------------------------------------
-    #    Slit related read/write attribute methods
+    #    Motor related read/write attribute methods
     # -----------------------------------------------------------------------------
-
 
     def read_Position(self, attr):
 
@@ -126,7 +193,7 @@ class SlitExecutor(PyTango.Device_4Impl):
                                                min_value) + ", max: " + str(max_value) + ")",
                                            "VmExecutor")
 
-        for motor_proxy, new_position in zip(self._proxies, self._vm_to_real_motors(new_position)):
+        for motor_proxy, new_position in zip(self._motors, self._vm_to_real_motors(new_position)):
             motor_proxy.Position = new_position
 
 
@@ -139,7 +206,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         #
         # if one of the motors is in the limit return 1
         #
-        for proxy in self._proxies:
+        for proxy in self._motors:
             no_limit *= proxy.CwLimit == 0
 
         attr.set_value(not no_limit)
@@ -153,7 +220,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         #
         # if one of the motors is in the limit return 1
         #
-        for proxy in self._proxies:
+        for proxy in self._motors:
             no_limit *= proxy.CCwLimit == 0
 
         attr.set_value(not no_limit)
@@ -223,7 +290,7 @@ class SlitExecutor(PyTango.Device_4Impl):
 
     def _set_attribute(self, name, value):
 
-        for proxy in self._proxies:
+        for proxy in self._motors:
             setattr(proxy, name, value*np.sign(getattr(proxy, name)))
 
     # -----------------------------------------------------------------------------
@@ -231,9 +298,11 @@ class SlitExecutor(PyTango.Device_4Impl):
         # first we need to check that attribute values are the same for all motors,
         # set it to min value (maintaining the sign!!) if not, and only then return absolute (!!) value
 
-        values = [getattr(proxy, name) for proxy in self._proxies]
+        values = [getattr(proxy, name)*scale if COMMON_ATTRIBUTES[name] else getattr(proxy, name)
+                  for proxy, _, scale in self._motors]
+
         new_value = np.min(np.abs(values))
-        for proxy, value in zip(self._proxies, values):
+        for proxy, _, _, value in zip(self._motors, values):
             setattr(proxy, name, new_value*np.sign(value))
 
         return new_value
@@ -392,7 +461,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         #
         # if one device is in FAULT the VM is in FAULT too
         #
-        for proxy in self._proxies:
+        for proxy in self._motors:
             if proxy.state() == PyTango.DevState.FAULT:
                 argout = PyTango.DevState.FAULT
                 break
@@ -400,7 +469,7 @@ class SlitExecutor(PyTango.Device_4Impl):
             #
             # if one device is MOVING the VM is MOVING too
             #
-            for proxy in self._proxies:
+            for proxy in self._motors:
                 if proxy.state() == PyTango.DevState.MOVING:
                     argout = PyTango.DevState.MOVING
                     break
@@ -422,7 +491,7 @@ class SlitExecutor(PyTango.Device_4Impl):
 
         self.debug_stream("In Calibrate()")
         try:
-            for proxy, position in zip(self._proxies, self.vm_to_real_motors(argin)):
+            for proxy, position in zip(self._motors, self.vm_to_real_motors(argin)):
                 proxy.Calibrate(position)
             return True
         except:
@@ -444,7 +513,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         :return:
         :rtype: PyTango.DevVoid """
         self.debug_stream("In StopMove()")
-        for proxy in self._proxies:
+        for proxy in self._motors:
             proxy.StopMove()
 
     # --------------------------------------------------------
@@ -455,8 +524,8 @@ class SlitExecutor(PyTango.Device_4Impl):
         ###
         # this function returns the position of slit according to the current mode
         ###
-        p1 = self._proxies[0].Position
-        p2 = self._proxies[1].Position
+        p1 = self._motors[0].Position
+        p2 = self._motors[1].Position
 
         if str(self.Mode).lower() in ['g', 'gap']:
             return p1 - p2
@@ -479,11 +548,11 @@ class SlitExecutor(PyTango.Device_4Impl):
 
         if str(self.Mode).lower() in ['g', 'gap']:
             delta = (new_position - self._real_motors_to_vm())/2.
-            return self._proxies[0].Position + delta, self._proxies[1].Position - delta
+            return self._motors[0].Position + delta, self._motors[1].Position - delta
 
         elif str(self.Mode).lower() in ['p', 'pos', 'position']:
             delta = new_position - self._real_motors_to_vm()
-            return self._proxies[0].Position + delta, self._proxies[1].Position + delta
+            return self._motors[0].Position + delta, self._motors[1].Position + delta
         else:
             PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
 
@@ -496,18 +565,18 @@ class SlitExecutor(PyTango.Device_4Impl):
         # this function returns the max limits of slits according to the current mode
         ###
         if str(self.Mode).lower() in ['g', 'gap']:
-            distances_to_limit = (self._proxies[0].UnitLimitMax - self._proxies[0].Position,
-                                  self._proxies[1].Position - self._proxies[1].UnitLimitMin)
+            distances_to_limit = (self._motors[0].UnitLimitMax - self._motors[0].Position,
+                                  self._motors[1].Position - self._motors[1].UnitLimitMin)
 
             if distances_to_limit[0] != distances_to_limit[1]:
                 limit_max = self._real_motors_to_vm() + 2 * min(distances_to_limit)
             else:
-                limit_max = self._proxies[0].UnitLimitMax - self._proxies[1].UnitLimitMin
+                limit_max = self._motors[0].UnitLimitMax - self._motors[1].UnitLimitMin
             return limit_max
 
         elif str(self.Mode).lower() in ['p', 'pos', 'position']:
             distance_to_limit = []
-            for proxy in self._proxies:
+            for proxy in self._motors:
                 distance_to_limit.append(proxy.UnitLimitMax - proxy.Position)
 
             return self._real_motors_to_vm() + min(distance_to_limit)
@@ -524,18 +593,18 @@ class SlitExecutor(PyTango.Device_4Impl):
         # this function returns the max limits of slits according to the current mode
         ###
         if str(self.Mode).lower() in ['g', 'gap']:
-            distances_to_limit = (self._proxies[0].Position - self._proxies[0].UnitLimitMin,
-                                  self._proxies[1].UnitLimitMax - self._proxies[1].Position)
+            distances_to_limit = (self._motors[0].Position - self._motors[0].UnitLimitMin,
+                                  self._motors[1].UnitLimitMax - self._motors[1].Position)
 
             if distances_to_limit[0] != distances_to_limit[1]:
                 limit_min = self._real_motors_to_vm() - 2 * min(distances_to_limit)
             else:
-                limit_min = self._proxies[0].UnitLimitMin - self._proxies[1].UnitLimitMax
+                limit_min = self._motors[0].UnitLimitMin - self._motors[1].UnitLimitMax
             return limit_min
 
         elif str(self.Mode).lower() in ['p', 'pos', 'position']:
             distance_to_limit = []
-            for proxy in self._proxies:
+            for proxy in self._motors:
                 distance_to_limit.append(proxy.UnitLimitMin - proxy.Position)
 
             return self._real_motors_to_vm() + min(distance_to_limit)
@@ -544,7 +613,9 @@ class SlitExecutor(PyTango.Device_4Impl):
             PyTango.Except.throw_exception("slit", "Unknown mode", "SlitExecutor")
 
 
-class SlitExecutorClass(PyTango.DeviceClass):
+
+
+class CombinedMotorClass(PyTango.DeviceClass):
 
     def dyn_attr(self, dev_list):
         """Invoked to create dynamic attributes for the given devices.
@@ -675,7 +746,7 @@ class SlitExecutorClass(PyTango.DeviceClass):
 def main():
     try:
         py = PyTango.Util(sys.argv)
-        py.add_class(SlitExecutorClass, SlitExecutor, 'SlitExecutor')
+        py.add_class(CombinedMotorClass, CombinedMotor, 'CombinedMotor')
 
         U = PyTango.Util.instance()
         U.server_init()
