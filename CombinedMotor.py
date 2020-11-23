@@ -273,14 +273,13 @@ class CombinedMotor(PyTango.Device_4Impl):
         self.debug_stream("In write_PositionSim()")
         self._position_sim = attr.get_write_value()
 
-
     # -----------------------------------------------------------------------------
     def read_ResultSim(self, attr):
 
         self.debug_stream("In read_ResultSim()")
         _answer = []
-        for name, position in zip(self._motor_names, self._vm_to_real_motors(self._position_sim)):
-            _answer.append("{} [{}]: {}".format(name, getattr(self, name), position))
+        for (proxy, _, _), position in zip(self._motors, self._vm_to_real_motors(self._position_sim)):
+            _answer.append("{}: {}".format(proxy.name(), position))
 
         attr.set_value(_answer, len(_answer))
 
@@ -301,12 +300,15 @@ class CombinedMotor(PyTango.Device_4Impl):
         # first we need to check that attribute values are the same for all motors,
         # set it to min value (maintaining the sign!!) if not, and only then return absolute (!!) value
 
-        values = [getattr(proxy, name)*scale if COMMON_ATTRIBUTES[name] else getattr(proxy, name)
+        values = [getattr(proxy, name)/scale if COMMON_ATTRIBUTES[name] and scale != 0 else getattr(proxy, name)
                   for proxy, _, scale in self._motors]
 
         new_value = np.min(np.abs(values))
-        for proxy, coupling, _, value in zip(self._motors, values):
-            setattr(proxy, name, new_value*coupling*np.sign(value))
+        for (proxy, _, scale), value in zip(self._motors, values):
+            if scale != 0:
+                setattr(proxy, name, new_value*np.abs(scale)*np.sign(value))
+            else:
+                setattr(proxy, name, new_value*np.sign(value))
 
         return new_value
 
@@ -494,7 +496,7 @@ class CombinedMotor(PyTango.Device_4Impl):
 
         self.debug_stream("In Calibrate()")
         try:
-            for proxy, coupling, _, position in zip(self._motors, self.vm_to_real_motors(argin)):
+            for (proxy, coupling, _), position in zip(self._motors, self.vm_to_real_motors(argin)):
                 proxy.Calibrate(coupling*position)
             return True
         except:
@@ -532,7 +534,6 @@ class CombinedMotor(PyTango.Device_4Impl):
             value += motor.Position*scale
 
         return value
-
 
     # --------------------------------------------------------
     # vm_to_real_motors
@@ -618,29 +619,9 @@ class CombinedMotorClass(PyTango.DeviceClass):
 
     #    Device Properties
     device_property_list = {
-        'Direction':
+        'MotorsCode':
             [PyTango.DevString,
-             "The direction of movement (Horizontal/Vertical)",
-             ["None"]],
-        'Mode':
-            [PyTango.DevString,
-             "The movement mode (Gap/Position)",
-             ["None"]],
-        'Left':
-            [PyTango.DevString,
-             "Motor, controlling left slit",
-             ["None"]],
-        'Right':
-            [PyTango.DevString,
-             "Motor, controlling right slit",
-             ["None"]],
-        'Top':
-            [PyTango.DevString,
-             "Motor, controlling top slit",
-             ["None"]],
-        'Bottom':
-            [PyTango.DevString,
-             "Motor, controlling bottom slit",
+             "The description of involved motors",
              ["None"]],
         'DynamicAttributes':
             [PyTango.DevVarStringArray,

@@ -41,6 +41,15 @@ __all__ = ["SlitExecutor", "SlitExecutorClass", "main"]
 
 __docformat__ = 'restructuredtext'
 
+ATTRIBUTES = { # Name: Scalable
+              'Acceleration': True,
+              'BaseRate': True,
+              'Conversion': True,
+              'SlewRate': True,
+              'SlewRateMax': True,
+              'SlewRateMin': True,
+              'StepBacklash': False}
+
 import PyTango
 import sys
 import numpy as np
@@ -91,8 +100,7 @@ class SlitExecutor(PyTango.Device_4Impl):
 
         # Checking whether sub-motors have equal settings
 
-        for attribute in ['Acceleration', 'BaseRate', 'Conversion', 'SlewRate', 'SlewRateMax', 'SlewRateMin',
-                          'StepBacklash']:
+        for attribute in ATTRIBUTES.keys():
             self._get_attribute(attribute)
 
 
@@ -223,8 +231,11 @@ class SlitExecutor(PyTango.Device_4Impl):
 
     def _set_attribute(self, name, value):
 
+        if str(self.Mode).lower() in ['g', 'gap'] and ATTRIBUTES[name]:
+            value /= 2
+
         for proxy in self._proxies:
-            setattr(proxy, name, value*np.sign(getattr(proxy, name)))
+            setattr(proxy, name, value * np.sign(getattr(proxy, name)))
 
     # -----------------------------------------------------------------------------
     def _get_attribute(self, name):
@@ -235,6 +246,9 @@ class SlitExecutor(PyTango.Device_4Impl):
         new_value = np.min(np.abs(values))
         for proxy, value in zip(self._proxies, values):
             setattr(proxy, name, new_value*np.sign(value))
+
+        if str(self.Mode).lower() in ['g', 'gap'] and ATTRIBUTES[name]:
+            new_value *= 2
 
         return new_value
 
