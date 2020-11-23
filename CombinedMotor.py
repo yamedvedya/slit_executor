@@ -140,8 +140,9 @@ class CombinedMotor(PyTango.Device_4Impl):
 
         try:
             _motors_definition = importlib.import_module(basename).MOTORS
-        except:
-            PyTango.Except.throw_exception("vm", 'Cannot import MOTORS from {}'.format(basename), "CombinedMotor")
+        except Exception as err:
+            # print(err)
+            PyTango.Except.throw_exception("CombinedMotor", 'Cannot import MOTORS from {} due to {}'.format(basename, err), "CombinedMotor")
 
 
         # --------------------------------------------------------
