@@ -100,13 +100,13 @@ __docformat__ = 'restructuredtext'
 
 # here we define which attributes has to scale, and which - not
 
-COMMON_ATTRIBUTES = {'Acceleration': True,
-                     'BaseRate': True,
-                     'Conversion': False,
-                     'SlewRate': True,
-                     'SlewRateMax': False,
-                     'SlewRateMin': False,
-                     'StepBacklash': False}
+ATTRIBUTES_LOGIC = {'Acceleration': 'sum',
+                     'BaseRate': 'sum',
+                     'SlewRate': 'sum',
+                     'SlewRateMax': 'max',
+                     'SlewRateMin': 'min',
+#                     'StepBacklash': False
+                    }
 
 import PyTango
 import sys
@@ -162,7 +162,7 @@ class CombinedMotor(PyTango.Device_4Impl):
 
         # Checking whether sub-motors have equal settings
 
-        for attribute in COMMON_ATTRIBUTES.keys():
+        for attribute in ATTRIBUTES_LOGIC.keys():
             self._get_attribute(attribute)
 
     def always_executed_hook(self):
@@ -290,27 +290,16 @@ class CombinedMotor(PyTango.Device_4Impl):
     def _set_attribute(self, name, value):
 
         for proxy, coupling, _ in self._motors:
-            if COMMON_ATTRIBUTES[name]:
-                setattr(proxy, name, value*coupling*np.sign(getattr(proxy, name)))
-            else:
-                setattr(proxy, name, value*np.sign(getattr(proxy, name)))
+            setattr(proxy, name, value*coupling*np.sign(getattr(proxy, name))*np.abs(proxy.conversion))
 
     # -----------------------------------------------------------------------------
     def _get_attribute(self, name):
         # first we need to check that attribute values are the same for all motors,
         # set it to min value (maintaining the sign!!) if not, and only then return absolute (!!) value
 
-        values = [getattr(proxy, name)/scale if COMMON_ATTRIBUTES[name] and scale != 0 else getattr(proxy, name)
-                  for proxy, _, scale in self._motors]
+        return getattr(np, ATTRIBUTES_LOGIC[name])([getattr(proxy, name)/(scale*np.abs(proxy.conversion))
+                                                    if scale != 0 else 0 for proxy, _, scale in self._motors])
 
-        new_value = np.min(np.abs(values))
-        for (proxy, _, scale), value in zip(self._motors, values):
-            if scale != 0:
-                setattr(proxy, name, new_value*np.abs(scale)*np.sign(value))
-            else:
-                setattr(proxy, name, new_value*np.sign(value))
-
-        return new_value
 
     # -----------------------------------------------------------------------------
     def read_Acceleration(self, attr):
@@ -338,16 +327,11 @@ class CombinedMotor(PyTango.Device_4Impl):
 
     # -----------------------------------------------------------------------------
     def read_Conversion(self, attr):
+        # Since we show all parameters already converted, the Conversion is set to 1
 
         self.debug_stream("In read_Conversion()")
-        attr.set_value(self._get_attribute('Conversion'))
+        attr.set_value(1)
 
-    # -----------------------------------------------------------------------------
-    def write_Conversion(self, attr):
-
-        self.debug_stream("In write_Conversion()")
-        self._set_attribute('Conversion', attr.get_write_value())
-        
     # -----------------------------------------------------------------------------
     def read_SlewRate(self, attr):
 
@@ -384,17 +368,17 @@ class CombinedMotor(PyTango.Device_4Impl):
         self.debug_stream("In write_SlewRateMin()")
         self._set_attribute('SlewRateMin', attr.get_write_value())
         
-    # -----------------------------------------------------------------------------
-    def read_StepBacklash(self, attr):
-
-        self.debug_stream("In read_StepBacklash()")
-        attr.set_value(self._get_attribute('StepBacklash'))
-
-    # -----------------------------------------------------------------------------
-    def write_StepBacklash(self, attr):
-
-        self.debug_stream("In write_StepBacklash()")
-        self._set_attribute('StepBacklash', attr.get_write_value())
+    # # -----------------------------------------------------------------------------
+    # def read_StepBacklash(self, attr):
+    #
+    #     self.debug_stream("In read_StepBacklash()")
+    #     attr.set_value(self._get_attribute('StepBacklash'))
+    #
+    # # -----------------------------------------------------------------------------
+    # def write_StepBacklash(self, attr):
+    #
+    #     self.debug_stream("In write_StepBacklash()")
+    #     self._set_attribute('StepBacklash', attr.get_write_value())
 
     # -----------------------------------------------------------------------------
     #    Support of dynamic attribute
@@ -675,7 +659,7 @@ class CombinedMotorClass(PyTango.DeviceClass):
         'Conversion':
             [[PyTango.DevDouble,
               PyTango.SCALAR,
-              PyTango.READ_WRITE]],
+              PyTango.READ]],
         'Acceleration':
             [[PyTango.DevDouble,
               PyTango.SCALAR,
@@ -696,10 +680,10 @@ class CombinedMotorClass(PyTango.DeviceClass):
             [[PyTango.DevDouble,
               PyTango.SCALAR,
               PyTango.READ_WRITE]],
-        'StepBacklash':
-            [[PyTango.DevDouble,
-              PyTango.SCALAR,
-              PyTango.READ_WRITE]],
+        # 'StepBacklash':
+        #     [[PyTango.DevDouble,
+        #       PyTango.SCALAR,
+        #       PyTango.READ_WRITE]],
     }
 
 

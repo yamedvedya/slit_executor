@@ -61,9 +61,11 @@ class SlitExecutor(PyTango.Device_4Impl):
         self.debug_stream("In __init__()")
         SlitExecutor.init_device(self)
 
+    # -----------------------------------------------------------------------------
     def delete_device(self):
         self.debug_stream("In delete_device()")
 
+    # -----------------------------------------------------------------------------
     def init_device(self):
         self.debug_stream("In init_device()")
         self.get_device_properties(self.get_device_class())
