@@ -105,7 +105,7 @@ ATTRIBUTES_LOGIC = {'Acceleration': 'sum',
                      'SlewRate': 'sum',
                      'SlewRateMax': 'max',
                      'SlewRateMin': 'min',
-#                     'StepBacklash': False
+                     'FlagClosedLoop': 'sum'
                     }
 
 import PyTango
@@ -194,7 +194,7 @@ class CombinedMotor(PyTango.Device_4Impl):
                                                min_value) + ", max: " + str(max_value) + ")",
                                            "VmExecutor")
 
-        for motor_proxy, _, _, new_position in zip(self._motors, self._vm_to_real_motors(new_position)):
+        for (motor_proxy, _, _), new_position in zip(self._motors, self._vm_to_real_motors(new_position)):
             motor_proxy.Position = new_position
 
 
@@ -295,8 +295,6 @@ class CombinedMotor(PyTango.Device_4Impl):
 
     # -----------------------------------------------------------------------------
     def _get_attribute(self, name):
-        # first we need to check that attribute values are the same for all motors,
-        # set it to min value (maintaining the sign!!) if not, and only then return absolute (!!) value
 
         return getattr(np, ATTRIBUTES_LOGIC[name])([getattr(proxy, name)/(scale*np.abs(proxy.conversion))
                                                     if scale != 0 else 0 for proxy, _, scale in self._motors])
@@ -369,17 +367,22 @@ class CombinedMotor(PyTango.Device_4Impl):
         self.debug_stream("In write_SlewRateMin()")
         self._set_attribute('SlewRateMin', attr.get_write_value())
         
-    # # -----------------------------------------------------------------------------
-    # def read_StepBacklash(self, attr):
-    #
-    #     self.debug_stream("In read_StepBacklash()")
-    #     attr.set_value(self._get_attribute('StepBacklash'))
-    #
-    # # -----------------------------------------------------------------------------
-    # def write_StepBacklash(self, attr):
-    #
-    #     self.debug_stream("In write_StepBacklash()")
-    #     self._set_attribute('StepBacklash', attr.get_write_value())
+    # -----------------------------------------------------------------------------
+    def read_FlagClosedLoop(self, attr):
+
+        self.debug_stream("In read_FlagClosedLoop()")
+        values = []
+        for proxy, in self._motors:
+            values.append(proxy.FlagClosedLoop)
+
+        attr.set_value(1 if np.any(np.array(values)) else 0)
+
+    # -----------------------------------------------------------------------------
+    def write_FlagClosedLoop(self, attr):
+
+        self.debug_stream("In write_FlagClosedLoop()")
+        for proxy, in self._motors:
+            proxy.FlagClosedLoop = attr.get_write_value()
 
     # -----------------------------------------------------------------------------
     #    Support of dynamic attribute
@@ -506,6 +509,27 @@ class CombinedMotor(PyTango.Device_4Impl):
         for proxy, _, _ in self._motors:
             proxy.StopMove()
 
+    # -----------------------------------------------------------------------------
+    def movevvc(self, argin):
+        """
+
+        :param : argin
+        :type: PyTango.DevVarStringArray
+        :return:
+        :rtype: PyTango.DevVoid """
+        self.debug_stream("In movevvc()")
+
+        cmd_lists = [[], []]
+        for line in argin:
+            slew, pos = line.split(',')
+            slew = int(slew.split(':')[1].strip())
+            positions = self._vm_to_real_motors(float(pos.split(':')[1].strip()))
+            for cmd_list, pos, (_, coupling, _) in zip(cmd_lists, positions, self._motors):
+                cmd_list.append(['slew: {}, position: {}'.format(slew*np.abs(coupling), pos)])
+
+        for (motor_proxy, _, _), cmd_list in zip(self._motors, cmd_lists):
+            motor_proxy.movevvc(cmd_list)
+
     # --------------------------------------------------------
     # real_motors_to_vm
     # --------------------------------------------------------
@@ -622,6 +646,9 @@ class CombinedMotorClass(PyTango.DeviceClass):
         'StopMove':
             [[PyTango.DevVoid, "none"],
              [PyTango.DevVoid, "none"]],
+        'movevvc':
+            [[PyTango.DevVarStringArray, "none"],
+             [PyTango.DevVoid, "none"]],
     }
 
     #    Attribute definitions
@@ -681,10 +708,10 @@ class CombinedMotorClass(PyTango.DeviceClass):
             [[PyTango.DevDouble,
               PyTango.SCALAR,
               PyTango.READ_WRITE]],
-        # 'StepBacklash':
-        #     [[PyTango.DevDouble,
-        #       PyTango.SCALAR,
-        #       PyTango.READ_WRITE]],
+        'FlagClosedLoop':
+            [[PyTango.DevLong,
+              PyTango.SCALAR,
+              PyTango.READ_WRITE]],
     }
 
 

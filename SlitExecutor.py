@@ -339,6 +339,18 @@ class SlitExecutor(PyTango.Device_4Impl):
         self._set_attribute('StepBacklash', attr.get_write_value())
 
     # -----------------------------------------------------------------------------
+    def read_FlagClosedLoop(self, attr):
+
+        self.debug_stream("In read_FlagClosedLoop()")
+        attr.set_value(self._get_attribute('FlagClosedLoop'))
+
+    # -----------------------------------------------------------------------------
+    def write_FlagClosedLoop(self, attr):
+
+        self.debug_stream("In write_FlagClosedLoop()")
+        self._set_attribute('FlagClosedLoop', attr.get_write_value())
+
+    # -----------------------------------------------------------------------------
     #    Support of dynamic attribute
     # -----------------------------------------------------------------------------
 
@@ -391,7 +403,7 @@ class SlitExecutor(PyTango.Device_4Impl):
         self.debug_stream("In read_attr_hardware()")
 
     # -----------------------------------------------------------------------------
-    #    VmExecutor command methods
+    #    SlitExecutor command methods
     # -----------------------------------------------------------------------------
 
     def dev_state(self):
@@ -462,6 +474,27 @@ class SlitExecutor(PyTango.Device_4Impl):
         self.debug_stream("In StopMove()")
         for proxy in self._proxies:
             proxy.StopMove()
+
+    # -----------------------------------------------------------------------------
+    def movevvc(self, argin):
+        """
+
+        :param : argin
+        :type: PyTango.DevVarStringArray
+        :return:
+        :rtype: PyTango.DevVoid """
+        self.debug_stream("In movevvc()")
+
+        cmd_lists = [[], []]
+        for line in argin:
+            slew, pos = line.split(',')
+            slew = int(slew.split(':')[1].strip())
+            positions = self._vm_to_real_motors(float(pos.split(':')[1].strip()))
+            for cmd_list, pos in zip(cmd_lists, positions):
+                cmd_list.append(['slew: {}, position: {}'.format(slew, pos)])
+
+        for motor_proxy, cmd_list in zip(self._proxies, cmd_lists):
+            motor_proxy.movevvc(cmd_list)
 
     # --------------------------------------------------------
     # real_motors_to_vm
@@ -622,6 +655,9 @@ class SlitExecutorClass(PyTango.DeviceClass):
         'StopMove':
             [[PyTango.DevVoid, "none"],
              [PyTango.DevVoid, "none"]],
+        'movevvc':
+            [[PyTango.DevVarStringArray, "none"],
+             [PyTango.DevVoid, "none"]],
     }
 
     #    Attribute definitions
@@ -683,6 +719,10 @@ class SlitExecutorClass(PyTango.DeviceClass):
               PyTango.READ_WRITE]],
         'StepBacklash':
             [[PyTango.DevDouble,
+              PyTango.SCALAR,
+              PyTango.READ_WRITE]],
+        'FlagClosedLoop':
+            [[PyTango.DevLong,
               PyTango.SCALAR,
               PyTango.READ_WRITE]],
     }
