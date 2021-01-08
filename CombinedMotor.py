@@ -108,6 +108,8 @@ ATTRIBUTES_LOGIC = {'Acceleration': 'sum',
                      'FlagClosedLoop': 'sum'
                     }
 
+SHOWN_CONVERSION = 10000
+
 import PyTango
 import sys
 import os
@@ -290,14 +292,15 @@ class CombinedMotor(PyTango.Device_4Impl):
 
     def _set_attribute(self, name, value):
 
+        value /= SHOWN_CONVERSION
         for proxy, coupling, _ in self._motors:
             setattr(proxy, name, value*coupling*np.sign(getattr(proxy, name))*np.abs(proxy.conversion))
 
     # -----------------------------------------------------------------------------
     def _get_attribute(self, name):
 
-        return getattr(np, ATTRIBUTES_LOGIC[name])([getattr(proxy, name)/(scale*np.abs(proxy.conversion))
-                                                    if scale != 0 else 0 for proxy, _, scale in self._motors])
+        return SHOWN_CONVERSION*getattr(np, ATTRIBUTES_LOGIC[name])([getattr(proxy, name)/(scale*np.abs(proxy.conversion))
+                                                               if scale != 0 else 0 for proxy, _, scale in self._motors])
 
 
     # -----------------------------------------------------------------------------
@@ -326,10 +329,10 @@ class CombinedMotor(PyTango.Device_4Impl):
 
     # -----------------------------------------------------------------------------
     def read_Conversion(self, attr):
-        # Since we show all parameters already converted, the Conversion is set to 1
+        # Since we show all parameters already converted, the Conversion is set to SHOWN_CONVERSION
 
         self.debug_stream("In read_Conversion()")
-        attr.set_value(1)
+        attr.set_value(SHOWN_CONVERSION)
 
     # -----------------------------------------------------------------------------
     def read_SlewRate(self, attr):
@@ -372,7 +375,7 @@ class CombinedMotor(PyTango.Device_4Impl):
 
         self.debug_stream("In read_FlagClosedLoop()")
         values = []
-        for proxy, in self._motors:
+        for proxy, _, _ in self._motors:
             values.append(proxy.FlagClosedLoop)
 
         attr.set_value(1 if np.any(np.array(values)) else 0)
@@ -381,7 +384,7 @@ class CombinedMotor(PyTango.Device_4Impl):
     def write_FlagClosedLoop(self, attr):
 
         self.debug_stream("In write_FlagClosedLoop()")
-        for proxy, in self._motors:
+        for proxy, _, _ in self._motors:
             proxy.FlagClosedLoop = attr.get_write_value()
 
     # -----------------------------------------------------------------------------
@@ -524,8 +527,9 @@ class CombinedMotor(PyTango.Device_4Impl):
             slew, pos = line.split(',')
             slew = int(slew.split(':')[1].strip())
             positions = self._vm_to_real_motors(float(pos.split(':')[1].strip()))
-            for cmd_list, pos, (_, coupling, _) in zip(cmd_lists, positions, self._motors):
-                cmd_list.append(['slew: {}, position: {}'.format(slew*np.abs(coupling), pos)])
+            for cmd_list, pos, (motor, coupling, _) in zip(cmd_lists, positions, self._motors):
+                cmd_list.append('slew: {}, position: {}'.format(slew*np.abs(coupling)*np.abs(motor.conversion)/
+                                                                SHOWN_CONVERSION, pos))
 
         for (motor_proxy, _, _), cmd_list in zip(self._motors, cmd_lists):
             motor_proxy.movevvc(cmd_list)

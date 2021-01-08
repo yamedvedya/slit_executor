@@ -491,9 +491,10 @@ class SlitExecutor(PyTango.Device_4Impl):
             slew = int(slew.split(':')[1].strip())
             positions = self._vm_to_real_motors(float(pos.split(':')[1].strip()))
             for cmd_list, pos in zip(cmd_lists, positions):
-                cmd_list.append(['slew: {}, position: {}'.format(slew, pos)])
+                cmd_list.append('slew: {}, position: {}'.format(slew, pos))
 
         for motor_proxy, cmd_list in zip(self._proxies, cmd_lists):
+            print(motor_proxy, cmd_list)
             motor_proxy.movevvc(cmd_list)
 
     # --------------------------------------------------------
