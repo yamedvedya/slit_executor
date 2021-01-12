@@ -48,7 +48,8 @@ ATTRIBUTES = { # Name: Scalable
               'SlewRate': True,
               'SlewRateMax': True,
               'SlewRateMin': True,
-              'StepBacklash': False}
+              'StepBacklash': False,
+              'FlagClosedLoop': False}
 
 import PyTango
 import sys
@@ -342,7 +343,9 @@ class SlitExecutor(PyTango.Device_4Impl):
     def read_FlagClosedLoop(self, attr):
 
         self.debug_stream("In read_FlagClosedLoop()")
-        attr.set_value(self._get_attribute('FlagClosedLoop'))
+        value = self._get_attribute('FlagClosedLoop')
+        print(value)
+        attr.set_value(value)
 
     # -----------------------------------------------------------------------------
     def write_FlagClosedLoop(self, attr):
