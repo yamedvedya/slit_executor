@@ -5,3 +5,6 @@
 !.gitignore
 !SlitExecutor.py
 !CombinedMotor.py
+!SlitExecutor
+!CombinedMotor
+

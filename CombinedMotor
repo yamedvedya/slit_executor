@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+# if python3-sardana is installed, we use python3
+#
+dpkg -s python3-sardana > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    pVer="python3"
+else
+    pVer="python"
+fi
+
+. /etc/tangorc
+exec $pVer /home/p23user/tango_servers/CombinedMotor.py $*
+
